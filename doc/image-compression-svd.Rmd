@@ -1,0 +1,154 @@
+---
+title: "Compressing images using the truncated SVD"
+author: "Anthony Lee"
+output: html_document
+---
+
+This is just an example of using RMarkdown to write about some R code for performing a particular task. Using the SVD for lossy image compression is mathematically simple, but not that effective in terms of compression ratio for a given amount of lost information.
+
+You may notice that the images in this document could be presented in a more aesthetically pleasing way, e.g. by arranging the images in a grid. This would take time, and the point of this kind of document is to record the main ideas efficiently rather than present a polished product.
+
+If you try to knit this RMarkdown file, you may find that compressing the matrices takes quite a bit of time. This is ultimately due to the `svd` function which calculates the singular values and a number of the left and right singular vectors, and is computationally costly when input matrices are large. One way to reduce the time is to configure R to use an optimized BLAS library for your system.
+
+## Loading JPEGs and matrix representation
+
+We consider lossy compression of grayscale images using the [singular value decomposition](https://en.wikipedia.org/wiki/Singular_value_decomposition) (SVD), a factorization of any real or complex matrix involving singular values and both right and left singular vectors.
+
+We begin by loading some code for loading and performing simple manipulations of JPEG files.
+
+```{r}
+source("../R/jpeg-manipulation.R")
+```
+
+We load a colour image of [David Blackwell](https://en.wikipedia.org/wiki/David_Blackwell), [taken by George M. Bergman](https://commons.wikimedia.org/wiki/Category:David_Blackwell#/media/File:David_Blackwell_1999_(re-scanned).jpg) and released under the [CC BY-SA 4.0 license](https://creativecommons.org/licenses/by-sa/4.0).
+
+```{r}
+blackwell.img <- load.jpeg("../data/blackwell.jpg")
+view.image(blackwell.img)
+```
+
+The R code we will use works on single matrices, so we convert the image (essentially 3 matrices, one each for red, green and blue) to a grayscale representation consisting of a single matrix. One could handle colour images in a similar manner by compressing each of the 3 "colour" matrices separately.
+
+```{r}
+blackwell.mtx <- grayscale(blackwell.img)
+view.image(blackwell.mtx)
+```
+
+Our goal is to compress matrices such as `blackwell.mtx`. We will also consider a public domain photographs of
+
+- [Florence Nightingale](https://en.wikipedia.org/wiki/Florence_Nightingale), [taken by Henry Hering](https://commons.wikimedia.org/wiki/File:Florence_Nightingale_(H_Hering_NPG_x82368).jpg), and
+- [John von Neumann](https://en.wikipedia.org/wiki/John_von_Neumann), [taken by someone at Los Alamos National Laboratory](https://commons.wikimedia.org/wiki/File:JohnvonNeumann-LosAlamos.jpg).
+
+```{r}
+nightingale.mtx <- grayscale(load.jpeg("../data/nightingale.jpg"))
+view.image(nightingale.mtx)
+```
+
+```{r}
+von.neumann.mtx <- grayscale(load.jpeg("../data/von-neumann.jpg"))
+view.image(von.neumann.mtx)
+```
+
+The sizes of the matrices are as follows.
+
+```{r}
+dim(blackwell.mtx)
+dim(nightingale.mtx)
+dim(von.neumann.mtx)
+```
+
+## Singular value decomposition
+
+The singular value decomposition of a real, $m \times n$ matrix $A$ is
+$$A = U \Sigma V^{\rm T} = \sum_{i=1}^{\min\{m,n\}} \sigma_i u_i v_i^{\rm T},$$
+where $U = (u_1 \cdots u_m)$ and $V = (v_1 \cdots v_n)$ are orthogonal $m \times m$ and $n \times n$ matrices, respectively, and $\Sigma = {\rm diag}(\sigma)$ is a $m \times n$ diagonal matrix of positive singular values, $\sigma$, in decreasing order.
+
+The motivation for approximating $A$ with a truncated SVD is the following Theorem.
+
+**Low-rank Approximation Theorem** (*Schmidt, 1908*). The rank $k$ matrix $B$ minimizing $\Vert A - B \Vert_F$ is
+$$B = A_k := U_k \Sigma_k V_k^{\rm T} = \sum_{i=1}^k \sigma_i u_i v_i^{\rm T},$$
+where $\Vert \cdot \Vert_F$ denotes the Frobenius norm. Moreover,
+$$\Vert A - A_k \Vert_F = \left ( \sum^{\min\{m,n\}}_{i=k+1} \sigma_i^2 \right )^{1/2}.$$
+
+## Compression
+
+We load the code for comrpessing and decompressing matrices, where the compressed matrix is essentialy a truncated SVD.
+
+```{r}
+source("../R/truncated-svd.R")
+```
+
+The low-rank approximation may have elements that are not in $[0,1]$, so we threshold the elements above and below by 1 and 0, respectively, before calling the `view.image` function. This can onlydecrease the error of the approximation, as measured using the Frobenius norm. It follows that if the thresholding has an effect, the thresholded matrix must have higher rank as otherwise this would contradict the theorem.
+
+```{r}
+blackwell.compressed <- compress.matrix(blackwell.mtx, rank=32)
+summary(blackwell.compressed)
+view.image(fix.image(decompress.matrix(blackwell.compressed)))
+```
+
+Some people prefer to "pipe" outputs to functions rather than use many nested function calls as above. Piping is provided by the `magrittr` library and the pipe operator is `%>%`. An alternative to
+
+```r
+view.image(fix.image(decompress.matrix(blackwell.compressed)))
+```
+
+is
+
+```{r}
+library(magrittr)
+blackwell.compressed %>% decompress.matrix %>% fix.image %>% view.image
+```
+
+Using the expression in the Low-rank Approximation Theorem, we can compute the Frobenius norm $\Vert A - A_k \Vert_F$ for each $k$ using only the singular values, and in particular without having to compute the matrix approximations and take differences.
+
+```{r}
+blackwell.sigmas <- get.singular.values(blackwell.mtx)
+plot(blackwell.sigmas, main="Singular values", pch=20)
+frobenius.norms <- get.frobenius.norms(blackwell.sigmas)
+plot(frobenius.norms$k, frobenius.norms$norm,
+     main="Approximation error against rank",
+     xlab="rank", ylab="error", pch=20)
+```
+
+The figure shows that the ordered singular values decrease quite rapidly, and so the error also decreases rapidly with the rank of the approximation.
+
+For a variety of ranks, we compute the low-rank approximation and view the corresponding image. Below each image, we give the rank, the compression ratio and the "average error". The average error is the Frobenius error divided by the square root of the number of matrix elements, and its use is motivated by the fact that it is invariant to matrix size, when each element is the same constant.
+
+```{r}
+for (i in c(1,3,5,7)) {
+  blackwell.compressed <- compress.matrix(blackwell.mtx, rank=2^i)
+  blackwell.compressed %>% decompress.matrix %>% fix.image %>% view.image
+  string <- paste0("rank: ", blackwell.compressed$rank,
+                   ", ratio: ", round(blackwell.compressed$ratio, 2),
+                   ", avg.error: ", signif(blackwell.compressed$avg.error, 3))
+  title(sub=string)
+}
+```
+
+We observe that the compressed matrix corresponds to a more accurate representation of the image when using a higher rank approximation, as we would expect. We also notice that the average error of 0.01 corresponds to an image that is quite difficult to distinguish from the original. We might speculate, therefore, that this is a suitable way to choose the rank of the approximation.
+
+## Experimenting with target average errors
+
+We experiment with this idea by targeting different average errors with the different images. Calling the `compress.matrix` function with the `avg.error` argument returns the lowest rank approximation with at most the given average error
+
+```{r}
+try.avg.errors <- function(mtx, avg.errors) {
+  for (ae in avg.errors) {
+    mtx.compressed <- compress.matrix(mtx, avg.error=ae)
+    mtx.compressed %>% decompress.matrix %>% fix.image %>% view.image
+    string <- paste0("rank: ", mtx.compressed$rank,
+                     ", ratio: ", round(mtx.compressed$ratio, 2),
+                     ", avg.error: ", signif(mtx.compressed$avg.error, 3))
+    title(sub=string)
+  }
+}
+```
+
+```{r}
+avg.errors <- c(0.05,0.01,0.002)
+try.avg.errors(blackwell.mtx, avg.errors)
+try.avg.errors(nightingale.mtx, avg.errors)
+try.avg.errors(von.neumann.mtx, avg.errors)
+```
+
+It looks like an average error of around 0.01 is a reasonable choice for these images, although it is unclear whether this is true more generally.

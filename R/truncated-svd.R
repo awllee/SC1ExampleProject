@@ -65,8 +65,6 @@ is.compressed.matrix <- function(x) {
   p <- min(m, n)
   ks <- 1:p
   ratios <- m*n/(ks*(m+n+1))
-  # print(ratios)
-  # print(which(ratios > ratio))
   rank.plus.1 <- min(which(ratios < ratio))
   if (rank.plus.1 > 1) {
     return(rank.plus.1 - 1)
